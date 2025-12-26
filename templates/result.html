@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="{{ 'ar' if ui_lang=='ar' else 'en' }}" dir="{{ 'rtl' if ui_lang=='ar' else 'ltr' }}">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ t("result_title") }}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="bg-light">
+  <div class="container py-5">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h3 class="mb-0">{{ t("result_title") }}</h3>
+      <a class="btn btn-outline-secondary" href="/?ui_lang={{ ui_lang }}">{{ t("back") }}</a>
+    </div>
+
+    {% if error %}
+      <div class="alert alert-danger">{{ error }}</div>
+    {% else %}
+      <div class="alert alert-info">
+        <span><b>{{ t("content_lang") }}:</b>
+          {% if content_lang == "auto" %}
+            {{ t("auto") }} (detected: {{ detected_lang }})
+          {% elif content_lang == "ar" %}
+            {{ t("arabic") }}
+          {% else %}
+            {{ t("english") }}
+          {% endif %}
+        </span>
+      </div>
+
+      <div class="row g-3">
+        <div class="col-lg-6">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <h5>{{ t("original_text") }}</h5>
+              <div class="text-muted mb-2">{{ t("words") }}: {{ wc_original }}</div>
+              <pre class="p-3 bg-body-tertiary rounded" style="white-space: pre-wrap;">{{ original }}</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-lg-6">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <h5>{{ t("summary") }}</h5>
+              <div class="text-muted mb-2">{{ t("words") }}: {{ wc_summary }}</div>
+              <pre class="p-3 bg-body-tertiary rounded" style="white-space: pre-wrap;">{{ summary }}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    {% endif %}
+
+  </div>
+</body>
+</html>

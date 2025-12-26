@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+jinja2
+python-multipart
+pdfplumber
+python-docx
+sumy
+nltk
+numpy
+pymupdf
