@@ -1,1 +1,187 @@
-body{font-family:Arial;}
+:root{
+  --radius: 18px;
+  --radius-sm: 14px;
+  --shadow: 0 12px 28px rgba(0,0,0,.18);
+  --focus: rgba(99,102,241,.25);
+  --brand1: #60a5fa;
+  --brand2: #a78bfa;
+}
+
+/* Light theme */
+:root[data-theme="light"]{
+  --bg1:#f7f8fb;
+  --bg2:#eef2ff;
+  --card: rgba(255,255,255,.88);
+  --card2: rgba(255,255,255,.96);
+  --border: rgba(15,23,42,.10);
+  --text: rgba(15,23,42,.92);
+  --muted: rgba(15,23,42,.65);
+  --input: rgba(255,255,255,.92);
+  --input-border: rgba(15,23,42,.12);
+  --pre-bg: rgba(15,23,42,.04);
+  --code-bg: rgba(15,23,42,.06);
+  --code-border: rgba(15,23,42,.08);
+}
+
+/* Dark theme */
+:root[data-theme="dark"]{
+  --bg1:#0b1220;
+  --bg2:#0f172a;
+  --card: rgba(255,255,255,.06);
+  --card2: rgba(255,255,255,.09);
+  --border: rgba(255,255,255,.12);
+  --text: rgba(255,255,255,.92);
+  --muted: rgba(255,255,255,.65);
+  --input: rgba(15,23,42,.55);
+  --input-border: rgba(255,255,255,.16);
+  --pre-bg: rgba(255,255,255,.06);
+  --code-bg: rgba(255,255,255,.08);
+  --code-border: rgba(255,255,255,.12);
+}
+
+/* Follow OS by default if JS didn't set it yet */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme]){
+    --bg1:#0b1220; --bg2:#0f172a;
+    --card: rgba(255,255,255,.06); --card2: rgba(255,255,255,.09);
+    --border: rgba(255,255,255,.12);
+    --text: rgba(255,255,255,.92); --muted: rgba(255,255,255,.65);
+    --input: rgba(15,23,42,.55); --input-border: rgba(255,255,255,.16);
+    --pre-bg: rgba(255,255,255,.06);
+    --code-bg: rgba(255,255,255,.08);
+    --code-border: rgba(255,255,255,.12);
+  }
+}
+
+*{ font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+
+/* Arabic font (Cairo) */
+body[dir="rtl"], body[dir="rtl"] *{
+  font-family: Cairo, Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif !important;
+}
+
+body{
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 600px at 15% 0%, rgba(99,102,241,.18), transparent 55%),
+    radial-gradient(900px 500px at 85% 10%, rgba(34,197,94,.14), transparent 50%),
+    linear-gradient(180deg, var(--bg1), var(--bg2));
+  color: var(--text);
+}
+
+.brand-dot{
+  width: 12px; height: 12px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand1), var(--brand2));
+  box-shadow: 0 0 0 6px rgba(167,139,250,.12);
+}
+
+.glass-card{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(10px);
+}
+
+.section-title{
+  font-size: .95rem;
+  font-weight: 600;
+  letter-spacing: .2px;
+  color: var(--text);
+}
+
+.label-muted{
+  color: var(--muted);
+  font-size: .85rem;
+  margin-bottom: .35rem;
+}
+
+.note{
+  background: var(--card2);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  color: var(--text);
+}
+
+.btn-ghost{
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: rgba(255,255,255,.03);
+  border-radius: var(--radius-sm);
+}
+.btn-ghost:hover{ background: rgba(255,255,255,.06); }
+
+.btn-modern{
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  box-shadow: var(--shadow);
+}
+
+.form-select-modern,
+.form-control-modern,
+.textarea-modern{
+  border-radius: var(--radius-sm) !important;
+  border: 1px solid var(--input-border) !important;
+  background: var(--input) !important;
+  color: var(--text) !important;
+}
+
+.form-select-modern:focus,
+.form-control-modern:focus,
+.textarea-modern:focus{
+  box-shadow: 0 0 0 .25rem var(--focus) !important;
+  border-color: rgba(99,102,241,.55) !important;
+}
+
+.textarea-modern{ min-height: 170px; resize: vertical; }
+
+pre{
+  margin: 0;
+  white-space: pre-wrap;
+  background: var(--pre-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  color: var(--text);
+}
+
+code{
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  padding: 2px 6px;
+  border-radius: 10px;
+  color: var(--text);
+}
+
+.mini-list{ display: flex; flex-direction: column; gap: 12px; }
+.mini-item{ display: flex; gap: 12px; align-items: flex-start; }
+.mini-badge{
+  width: 28px; height: 28px; border-radius: 10px;
+  display: grid; place-items: center;
+  background: rgba(99,102,241,.18);
+  border: 1px solid rgba(99,102,241,.35);
+  color: var(--text);
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.text-muted{ color: var(--muted) !important; }
+.small-muted{ color: var(--muted); font-size: .9rem; }
+
+.alert{
+  background: var(--card2) !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text) !important;
+  border-radius: var(--radius-sm);
+}
+
+/* Ensure tips text is readable */
+.fw-semibold, .fw-bold, h1,h2,h3,h4,h5,h6, .section-title{
+  color: var(--text) !important;
+}
+.card, .card-body, .mini-item, .mini-item div{ color: var(--text) !important; }
+.mini-item .text-muted, .small, .text-muted{ color: var(--muted) !important; }
+
+/* RTL layout for tips list */
+body[dir="rtl"] .mini-item{ flex-direction: row-reverse; }
+body[dir="rtl"] .mini-item > div{ text-align: right; }

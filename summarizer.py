@@ -1,78 +1,187 @@
-import re
+import os, re, nltk, requests
 from sumy.parsers.plaintext import PlaintextParser
 from sumy.nlp.tokenizers import Tokenizer
 from sumy.summarizers.lsa import LsaSummarizer
-import nltk
-
-def ensure_nltk():
-    try:
-        nltk.data.find("tokenizers/punkt")
-    except LookupError:
-        nltk.download("punkt")
-
-    # NLTK new versions need this too
-    try:
-        nltk.data.find("tokenizers/punkt_tab/english")
-    except LookupError:
-        nltk.download("punkt_tab")
-
 
 ARABIC_RANGE = re.compile(r"[\u0600-\u06FF]")
 
+DEFAULT_OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+DEFAULT_OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct")
+
+def ensure_nltk_resources():
+    try:
+        nltk.data.find("tokenizers/punkt")
+    except LookupError:
+        nltk.download("punkt", quiet=True)
+    try:
+        nltk.data.find("tokenizers/punkt_tab/english")
+    except LookupError:
+        try:
+            nltk.download("punkt_tab", quiet=True)
+        except Exception:
+            pass
+
 def detect_lang(text: str) -> str:
-    # heuristic: if a decent portion of chars are Arabic, treat as Arabic
     if not text:
         return "en"
     arabic_chars = len(ARABIC_RANGE.findall(text))
     return "ar" if arabic_chars >= max(20, int(len(text) * 0.08)) else "en"
 
-def normalize(text: str) -> str:
-    return (text or "").strip()
-
-def split_sentences_fallback(text: str, lang: str) -> list[str]:
-    # fallback sentence splitting
+def split_sentences_fallback(text: str, lang: str):
     if lang == "ar":
-        # Arabic punctuation: . ؟ !
         parts = re.split(r"(?<=[\.\!\؟\!])\s+|\n+", text)
     else:
         parts = re.split(r"(?<=[\.\!\?])\s+|\n+", text)
-    parts = [p.strip() for p in parts if p.strip()]
-    return parts
+    return [p.strip() for p in parts if p.strip()]
 
-def get_tokenizer_lang(lang: str) -> str:
-    # Sumy tokenizers are limited; we use english for non-supported but keep fallback splitting.
-    return "english" if lang != "en" else "english"
-
-def summarize_text(text: str, ratio: float = 0.25, content_lang: str = "auto") -> tuple[str, str]:
-    text = normalize(text)
+def extractive_summarize(text: str, ratio: float = 0.25):
+    text = (text or "").strip()
     if not text:
-        return "", "en"
-
-    lang = detect_lang(text) if content_lang == "auto" else content_lang
-
-    # If very short, return as-is
+        return ""
+    lang = detect_lang(text)
     sents = split_sentences_fallback(text, lang)
     if len(sents) <= 3:
-        return text, lang
+        return text
+    try:
+        ensure_nltk_resources()
+        parser = PlaintextParser.from_string(text, Tokenizer("english"))
+        target = max(3, int(len(list(parser.document.sentences)) * ratio))
+        target = min(target, 12)
+        summarizer = LsaSummarizer()
+        summary_sents = summarizer(parser.document, target)
+        out = " ".join(str(s) for s in summary_sents).strip()
+        if out:
+            return out
+    except Exception:
+        pass
+    target = max(3, int(len(sents) * ratio))
+    target = min(target, 12, len(sents))
+    return " ".join(sents[:target]).strip()
 
-    # LSA summarization using Sumy
-    tokenizer = Tokenizer(get_tokenizer_lang(lang))
-    ensure_nltk()
-    parser = PlaintextParser.from_string(text, tokenizer)
+def _build_prompt(lang: str, style: str, length: str, chunk_text: str):
+    if lang == "ar":
+        style_txt = {
+            "paragraph": "اكتب فقرة واحدة فقط.",
+            "bullets": "اكتب 5-7 نقاط مختصرة فقط.",
+            "both": "اكتب فقرة قصيرة ثم 5-7 نقاط.",
+        }[style]
+        len_txt = {"short":"قصير", "medium":"متوسط", "long":"طويل"}[length]
+        return (
+            "أنت مساعد تلخيص محترف.\n"
+            "المطلوب: لخص النص التالي باللغة العربية الفصحى.\n"
+            f"الطول: {len_txt}. {style_txt}\n"
+            "قيود مهمة:\n"
+            "- لا تضف أي معلومات غير موجودة بالنص.\n"
+            "- لا تخترع أسماء أو تواريخ أو أحداث.\n"
+            "- حافظ على الأرقام والتواريخ كما هي إن وُجدت.\n\n"
+            "النص:\n"
+            f"{chunk_text}\n\n"
+            "الملخص:"
+        )
+    else:
+        style_txt = {
+            "paragraph":"Write one paragraph only.",
+            "bullets":"Write 5-7 concise bullet points only.",
+            "both":"Write a short paragraph then 5-7 bullet points.",
+        }[style]
+        len_txt = {"short":"short", "medium":"medium", "long":"long"}[length]
+        return (
+            "You are a professional summarization assistant.\n"
+            "Task: Summarize the following text.\n"
+            f"Length: {len_txt}. {style_txt}\n"
+            "Important constraints:\n"
+            "- Do NOT add facts not present in the text.\n"
+            "- Do NOT invent names, dates, or events.\n"
+            "- Preserve numbers/dates if present.\n\n"
+            "Text:\n"
+            f"{chunk_text}\n\n"
+            "Summary:"
+        )
 
-    sentences_count = len(list(parser.document.sentences))
-    if sentences_count <= 3:
-        return text, lang
+def _chunk_text(text: str, max_chars: int = 8000):
+    text = (text or "").strip()
+    if len(text) <= max_chars:
+        return [text]
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(len(text), start + max_chars)
+        chunk = text[start:end]
+        cut = chunk.rfind("\n")
+        if cut > max_chars * 0.6:
+            chunk = chunk[:cut]
+            end = start + cut
+        chunks.append(chunk.strip())
+        start = end
+    return [c for c in chunks if c]
 
-    target = max(3, int(sentences_count * ratio))
-    target = min(target, 12)
+def ollama_generate(prompt: str, ollama_url: str, model: str, num_predict: int, temperature: float = 0.0):
+    url = ollama_url.rstrip("/") + "/api/generate"
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": temperature,
+            "num_predict": num_predict,
+        }
+    }
+    r = requests.post(url, json=payload, headers=_ollama_headers(ollama_api_key), timeout=600)
+    r.raise_for_status()
+    data = r.json()
+    return (data.get("response") or "").strip()
 
-    summarizer = LsaSummarizer()
-    summary_sents = summarizer(parser.document, target)
-    summary = " ".join(str(s) for s in summary_sents).strip()
+def ollama_summarize(text: str, length: str = "medium", content_lang: str = "auto",
+                    style: str = "both", ollama_url: str = DEFAULT_OLLAMA_URL, model: str = DEFAULT_OLLAMA_MODEL):
+    text = (text or "").strip()
+    if not text:
+        return "", "en"
+    lang = detect_lang(text) if content_lang == "auto" else content_lang
 
-    # If summary came empty (rare), fallback: first N sentences
-    if not summary:
-        summary = " ".join(sents[:target])
+    num_predict = {"short":220, "medium":380, "long":650}.get(length, 380)
 
-    return summary, lang
+    chunks = _chunk_text(text, max_chars=8000)
+    partial = []
+    for ch in chunks:
+        prompt = _build_prompt(lang, style, length, ch)
+        partial.append(ollama_generate(prompt, ollama_url, model, num_predict=num_predict))
+
+    if len(partial) == 1:
+        return partial[0], lang
+
+    merged = "\n\n".join(partial)
+    reduce_prompt = _build_prompt(lang, style, length, merged)
+    final = ollama_generate(reduce_prompt, ollama_url, model, num_predict=num_predict)
+    return final, lang
+
+def summarize_text(text: str, ratio: float = 0.25, length: str = "medium", content_lang: str = "auto",
+                   engine: str = "ollama_local", mode: str = "fallback", style: str = "both",
+                   ollama_url: str = DEFAULT_OLLAMA_URL, model: str = DEFAULT_OLLAMA_MODEL):
+    text = (text or "").strip()
+    if not text:
+        return "", "en", engine, ""
+
+    detected = detect_lang(text) if content_lang == "auto" else content_lang
+
+    if engine == "extractive":
+        return extractive_summarize(text, ratio=ratio), detected, "extractive", ""
+
+    try:
+        out, _lang = ollama_summarize(
+            text, length=length, content_lang=content_lang, style=style,
+            ollama_url=ollama_url, model=model
+        )
+        return out, detected, "ollama", ""
+    except Exception as e:
+        if mode == "strict":
+            return "", detected, "ollama", str(e)
+        return extractive_summarize(text, ratio=ratio), detected, "extractive", str(e)
+
+
+def _ollama_headers(api_key: str) -> dict:
+    api_key = (api_key or "").strip()
+    if not api_key:
+        return {"Content-Type": "application/json"}
+    if api_key.lower().startswith("bearer "):
+        return {"Content-Type": "application/json", "Authorization": api_key}
+    return {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
