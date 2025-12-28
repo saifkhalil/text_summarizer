@@ -34,6 +34,9 @@
                 onclick="window.__toggleTheme && window.__toggleTheme()" aria-pressed="false" title="Theme">
           🌙
         </button>
+        <a class="btn btn-ghost btn-sm" href="/?ui_lang={{ 'en' if ui_lang == 'ar' else 'ar' }}">
+          {{ 'English' if ui_lang == 'ar' else 'العربية' }}
+        </a>
         <a class="btn btn-ghost btn-sm" href="/?ui_lang={{ ui_lang }}">{{ t("back") }}</a>
       </div>
     </div>

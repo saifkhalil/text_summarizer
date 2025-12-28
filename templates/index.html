@@ -13,13 +13,17 @@
 </head>
 
 <body>
+  <div id="loadingOverlay" class="loading-overlay" style="display: none !important;">
+    <div class="spinner-container"></div>
+    <div class="loading-text">{{ t("loading") }}</div>
+  </div>
+
   <div class="container py-5">
     <div class="d-flex align-items-center justify-content-between mb-4">
       <div class="d-flex align-items-center gap-3">
         <div class="brand-dot"></div>
         <div>
           <div class="h5 mb-0">{{ t("app_title") }}</div>
-          <div class="text-muted small">{{ t("hint") }}</div>
         </div>
       </div>
 
@@ -28,13 +32,14 @@
                 onclick="window.__toggleTheme && window.__toggleTheme()" aria-pressed="false" title="Theme">
           🌙
         </button>
-        <a class="btn btn-ghost btn-sm" href="/?ui_lang=en">{{ t("ui_en") }}</a>
-        <a class="btn btn-ghost btn-sm" href="/?ui_lang=ar">{{ t("ui_ar") }}</a>
+        <a class="btn btn-ghost btn-sm" href="/?ui_lang={{ 'en' if ui_lang == 'ar' else 'ar' }}">
+          {{ 'English' if ui_lang == 'ar' else 'العربية' }}
+        </a>
       </div>
     </div>
 
     <div class="row g-4">
-      <div class="col-lg-7">
+      <div class="col-lg-12">
         <div class="card glass-card shadow-sm">
           <div class="card-body p-4">
             <form action="/summarize" method="post" enctype="multipart/form-data">
@@ -42,7 +47,7 @@
 
               <div class="section-title mb-2">Settings</div>
               <div class="row g-3 mb-3">
-                <div class="col-md-4">
+                <div class="col-md-6">
                   <label class="form-label label-muted">{{ t("engine") }}</label>
                   <select class="form-select form-select-modern" name="engine" id="engineSelect">
                     <option value="ollama_local" selected>{{ t("engine_ollama_local") }}</option>
@@ -51,15 +56,7 @@
                   </select>
                 </div>
 
-                <div class="col-md-4">
-                  <label class="form-label label-muted">{{ t("mode") }}</label>
-                  <select class="form-select form-select-modern" name="mode">
-                    <option value="fallback" selected>{{ t("fallback") }}</option>
-                    <option value="strict">{{ t("strict") }}</option>
-                  </select>
-                </div>
-
-                <div class="col-md-4">
+                <div class="col-md-6">
                   <label class="form-label label-muted">{{ t("content_lang") }}</label>
                   <select class="form-select form-select-modern" name="content_lang">
                     <option value="auto" selected>{{ t("auto") }}</option>
@@ -88,54 +85,19 @@
               </div>
 
               <div class="row g-3 mb-4">
-                <div class="col-12" id="cloudPresetGroup">
-                  <label class="form-label label-muted">{{ t("cloud_preset") }}</label>
-                  <select class="form-select form-select-modern" id="cloudPreset">
-                    <option value="custom" selected>{{ t("preset_custom") }}</option>
-                    <option value="company">{{ t("preset_company") }}</option>
-                    <option value="home">{{ t("preset_home") }}</option>
-                  </select>
-                  <div class="text-muted small mt-1">{{ t("cloud_preset_hint") }}</div>
-                </div>
-
-                <div class="col-md-6">
+                <div class="col-md-6" id="ollamaUrlGroup">
                   <label class="form-label label-muted">{{ t("ollama_url") }}</label>
-                  <input class="form-control form-control-modern" name="ollama_url" value="http://localhost:11434"/>
+                  <input class="form-control form-control-modern" name="ollama_url" id="ollamaUrl" value="http://localhost:11434"/>
                 </div>
-                <div class="col-md-6">
+                <div class="col-md-6" id="ollamaModelGroup">
                   <label class="form-label label-muted">{{ t("ollama_model") }}</label>
-                  <input class="form-control form-control-modern" name="model" value="qwen2.5:3b-instruct"/>
+                  <input class="form-control form-control-modern" name="model" id="ollamaModel" value="qwen2.5:3b-instruct"/>
+                  <select class="form-select form-select-modern" id="ollamaModelList" style="display:none;"></select>
                 </div>
-                  <div class="col-12" id="apiKeyGroup">
-              <label class="form-label label-muted">{{ t("ollama_api_key") }}</label>
-
-              <div class="input-group">
-                <input
-                  class="form-control form-control-modern"
-                  type="password"
-                  name="ollama_api_key"
-                  id="ollamaApiKey"
-                  placeholder="{{ t('ollama_api_key_ph') }}"
-                  autocomplete="off"
-                />
-                <button
-                  class="btn btn-ghost"
-                  type="button"
-                  id="apiKeyToggle"
-                  title="{{ t('show_hide') }}"
-                >
-                  👁️
-                </button>
-              </div>
-
-              <div class="text-muted small mt-1">
-                {{ t("ollama_api_key_hint") }}
-              </div>
-            </div>
                 <div class="col-12">
                   <div class="note">
                     {{ t("ollama_note") }}
-                    <div class="small text-muted mt-1">
+                    <div id="ollamaModelHint" class="small text-muted mt-1">
                       Recommended: <code>qwen2.5:7b-instruct</code> · Fast: <code>qwen2.5:3b-instruct</code>
                     </div>
                   </div>
@@ -148,140 +110,144 @@
                           placeholder="{{ t('write_text_ph') }}"></textarea>
               </div>
 
-              <div class="mb-4">
-                <label class="form-label label-muted">{{ t("or_upload") }}</label>
-                <input class="form-control form-control-modern" type="file" name="file" accept=".pdf,.docx">
-              </div>
+              <div id="formErrorHost"></div>
 
               <div class="d-flex align-items-center justify-content-between gap-3">
                 <button class="btn btn-primary btn-modern px-4" type="submit">
                   {{ t("summarize") }}
                 </button>
-
-                <div class="small text-muted">
-                  Tip: for speed use <code>qwen2.5:3b-instruct</code>.
-                </div>
               </div>
             </form>
           </div>
         </div>
       </div>
 
-      <div class="col-lg-5">
-        <div class="card glass-card shadow-sm">
-          <div class="card-body p-4">
-            <div class="section-title mb-2">{{ t("quick_tips") }}</div>
-
-            <div class="mini-list">
-              <div class="mini-item">
-                <div class="mini-badge">1</div>
-                <div>
-                  <div class="fw-semibold">{{ t("tip_best_quality") }}</div>
-                  <div class="text-muted small">{{ t("tip_best_quality_desc") }}</div>
-                </div>
-              </div>
-
-              <div class="mini-item">
-                <div class="mini-badge">2</div>
-                <div>
-                  <div class="fw-semibold">{{ t("tip_best_speed") }}</div>
-                  <div class="text-muted small">{{ t("tip_best_speed_desc") }}</div>
-                </div>
-              </div>
-
-              <div class="mini-item">
-                <div class="mini-badge">3</div>
-                <div>
-                  <div class="fw-semibold">{{ t("tip_errors") }}</div>
-                  <div class="text-muted small">{{ t("tip_errors_desc") }}</div>
-                </div>
-              </div>
-            </div>
-
-            <hr class="my-4">
-
-            <div class="small text-muted">
-              Ollama must be running on your machine. Default endpoint:
-              <code>http://localhost:11434</code>
-            </div>
-          </div>
-        </div>
-
-        <div class="mt-3 small text-muted">
-          Minimal UI · Arabic RTL supported · PDF/DOCX supported
-        </div>
-      </div>
     </div>
   </div>
 
   <script>
 (function(){
-  const PRESETS = {
-    company: { url: "https://your-company-ollama-endpoint", model: "qwen2.5:7b-instruct" },
-    home:    { url: "https://your-home-ollama-endpoint",    model: "qwen2.5:7b-instruct" },
-    custom:  null
-  };
-
-  function setApiKeyVisible(visible){
-    const input = document.getElementById("ollamaApiKey");
-    const btn = document.getElementById("apiKeyToggle");
-    if(!input || !btn) return;
-    input.type = visible ? "text" : "password";
-    btn.textContent = visible ? "🙈" : "👁️";
-  }
-
-  function applyPreset(){
-    const preset = document.getElementById("cloudPreset")?.value || "custom";
-    const url = document.getElementById("ollamaUrl");
-    const model = document.getElementById("ollamaModel");
-    const data = PRESETS[preset];
-    if(!data || !url || !model) return;
-    url.value = data.url;
-    model.value = data.model;
+  function setVisible(el, visible){
+    if(!el) return;
+    el.style.display = visible ? "block" : "none";
   }
 
   function updateOllamaForm(){
     const engine = document.getElementById("engineSelect")?.value || "ollama_local";
 
     const url = document.getElementById("ollamaUrl");
-    const model = document.getElementById("ollamaModel");
+    const modelInput = document.getElementById("ollamaModel");
+    const modelList = document.getElementById("ollamaModelList");
 
-    const apiGroup = document.getElementById("apiKeyGroup");
-    const key = document.getElementById("ollamaApiKey");
-    const presetGroup = document.getElementById("cloudPresetGroup");
-    const preset = document.getElementById("cloudPreset");
+    const hint = document.getElementById("ollamaModelHint");
 
     const isOllama = (engine === "ollama_local" || engine === "ollama_cloud");
     const isCloud  = (engine === "ollama_cloud");
 
+    if(hint){
+      if(isCloud){
+        hint.innerHTML = 'Recommended: <code>gpt-oss:120b</code> · Fast: <code>gpt-oss:20b</code>';
+      } else {
+        hint.innerHTML = 'Recommended: <code>qwen2.5:7b-instruct</code> · Fast: <code>qwen2.5:3b-instruct</code>';
+      }
+    }
+
     if(url){
       url.disabled = !isOllama;
+      if(isCloud){
+        url.value = "https://ollama.com/";
+        url.readOnly = true;
+      } else {
+        url.readOnly = false;
+        if(url.value === "https://ollama.com/") {
+          url.value = "http://localhost:11434";
+        }
+      }
       url.placeholder = isCloud ? "{{ t('ollama_url_cloud_ph') }}" : "{{ t('ollama_url_local_ph') }}";
     }
-    if(model) model.disabled = !isOllama;
 
-    if(presetGroup) presetGroup.style.display = isCloud ? "block" : "none";
-    if(preset) preset.disabled = !isCloud;
+    if(modelInput && modelList){
+      modelInput.disabled = !isOllama;
+      if(isCloud){
+        modelInput.style.display = "none";
+        modelInput.name = ""; // Remove name so it's not submitted
+        modelList.style.display = "block";
+        modelList.name = "model"; // Give name to the select
+        modelList.disabled = false;
+        fetchCloudModels();
+      } else {
+        modelInput.style.display = "block";
+        modelInput.name = "model";
+        modelList.style.display = "none";
+        modelList.name = "";
+        modelList.disabled = true;
+      }
+    }
+  }
 
-    if(apiGroup) apiGroup.style.display = isCloud ? "block" : "none";
-    if(key) key.disabled = !isCloud;
+  async function fetchCloudModels(){
+    const modelList = document.getElementById("ollamaModelList");
+    if(!modelList) return;
 
-    // if switching away from cloud, hide key as password again
-    if(!isCloud) setApiKeyVisible(false);
+    // Only fetch if it's empty or only has the loading/fallback message
+    if (modelList.options.length > 1 && modelList.value !== "") return;
+
+    modelList.innerHTML = '<option value="">Loading models...</option>';
+    try {
+      const resp = await fetch("/api/models");
+      const data = await resp.json();
+      if(data && data.models){
+        modelList.innerHTML = "";
+        data.models.forEach(m => {
+          const opt = document.createElement("option");
+          opt.value = m.name;
+          opt.textContent = m.name;
+          if(m.name === "gpt-oss:20b") opt.selected = true;
+          modelList.appendChild(opt);
+        });
+      }
+    } catch(e) {
+      console.error("Failed to fetch models", e);
+      modelList.innerHTML = '<option value="gpt-oss:120b">gpt-oss:120b</option>';
+    }
+  }
+
+  function showFormError(msg){
+    const host = document.getElementById("formErrorHost");
+    if(!host) return alert(msg);
+    host.innerHTML = '<div class="alert mt-3"><div class="fw-semibold">'+msg+'</div></div>';
+  }
+
+  function validateBeforeSubmit(ev){
+    const engine = document.getElementById("engineSelect")?.value || "ollama_local";
+    
+    // Check if cloud mode requirements are met
+    if(engine === "ollama_cloud") {
+      const url = (document.getElementById("ollamaUrl")?.value || "").trim();
+      let model = (document.getElementById("ollamaModelList")?.value || "").trim();
+
+      if(!url || !model){
+        ev.preventDefault();
+        showFormError("{{ t('err_cloud_requires_url_model') }}");
+        return false;
+      }
+    }
+
+    // If validation passes, show loading overlay
+    const overlay = document.getElementById("loadingOverlay");
+    if (overlay) {
+      overlay.setAttribute("style", "display: flex !important;");
+    }
+    
+    return true;
   }
 
   document.addEventListener("DOMContentLoaded", function(){
     const sel = document.getElementById("engineSelect");
-    const preset = document.getElementById("cloudPreset");
-    const eye = document.getElementById("apiKeyToggle");
+    const form = document.querySelector("form[action='/summarize']");
 
     if(sel) sel.addEventListener("change", updateOllamaForm);
-    if(preset) preset.addEventListener("change", function(){ applyPreset(); });
-    if(eye) eye.addEventListener("click", function(){
-      const input = document.getElementById("ollamaApiKey");
-      if(!input) return;
-      setApiKeyVisible(input.type === "password");
-    });
+    if(form) form.addEventListener("submit", validateBeforeSubmit);
 
     updateOllamaForm();
   });

@@ -1,4 +1,7 @@
 import os, uuid
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -7,12 +10,13 @@ from fastapi.staticfiles import StaticFiles
 from file_extractors import extract_text_from_pdf, extract_text_from_docx
 from summarizer import summarize_text
 from i18n import t
+import requests
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-app = FastAPI(title="Text Summarization System (Ollama v6)")
+app = FastAPI(title="Text Summarization System")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
@@ -30,6 +34,15 @@ def index(request: Request, ui_lang: str="en"):
     ui_lang = safe_ui_lang(ui_lang)
     return templates.TemplateResponse("index.html", {"request":request, "ui_lang":ui_lang, "t":lambda k: t(ui_lang,k)})
 
+@app.get("/api/models")
+def get_cloud_models():
+    try:
+        resp = requests.get("https://ollama.com/api/tags", timeout=5)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        return {"models": [], "error": str(e)}
+
 @app.post("/summarize", response_class=HTMLResponse)
 async def summarize(
     request: Request,
@@ -40,18 +53,41 @@ async def summarize(
     style: str = Form(default="both"),
     ollama_url: str = Form(default=os.getenv("OLLAMA_URL","http://localhost:11434")),
     model: str = Form(default=os.getenv("OLLAMA_MODEL","qwen2.5:7b-instruct")),
-    ollama_api_key: str = Form(default=os.getenv("OLLAMA_API_KEY","")),
     input_text: str = Form(default=""),
     length: str = Form(default="medium"),
     file: UploadFile = File(default=None),
 ):
+    ollama_api_key = os.getenv("OLLAMA_API_KEY", "")
     ui_lang = safe_ui_lang(ui_lang)
     content_lang = content_lang if content_lang in ("auto","en","ar") else "auto"
-    engine = engine if engine in ("ollama","extractive") else "ollama"
+    engine = engine if engine in ("ollama_local","ollama_cloud","ollama","extractive") else "ollama_local"
+    if engine == "ollama":
+        engine = "ollama_local"
     mode = mode if mode in ("strict","fallback") else "fallback"
     style = style if style in ("paragraph","bullets","both") else "both"
 
+    
     text = (input_text or "").strip()
+    # Server-side validation for Cloud mode
+    if engine == "ollama_cloud":
+        if not (ollama_url or "").strip() or not (model or "").strip():
+            return templates.TemplateResponse("result.html", {
+                "request":request,"ui_lang":ui_lang,"t":lambda k: t(ui_lang,k),
+                "error": t(ui_lang,"err_cloud_requires_url_model"),"engine_error":"",
+                "original":text,"summary":"",
+                "wc_original":word_count(text),"wc_summary":0,"detected_lang":"","content_lang":content_lang,
+                "length":length,"engine":engine,"used_engine":engine,"mode":mode,"style":style,
+                "ollama_url":ollama_url,"model":model
+            })
+        if not (ollama_api_key or "").strip():
+            return templates.TemplateResponse("result.html", {
+                "request":request,"ui_lang":ui_lang,"t":lambda k: t(ui_lang,k),
+                "error": t(ui_lang, "err_cloud_requires_key"),"engine_error":"",
+                "original":text,"summary":"",
+                "wc_original":word_count(text),"wc_summary":0,"detected_lang":"","content_lang":content_lang,
+                "length":length,"engine":engine,"used_engine":engine,"mode":mode,"style":style,
+                "ollama_url":ollama_url,"model":model
+            })
 
     if file and file.filename:
         ext = os.path.splitext(file.filename.lower())[1]

@@ -1,4 +1,4 @@
-import os, re, nltk, requests
+import os, re, nltk, requests, ollama
 from sumy.parsers.plaintext import PlaintextParser
 from sumy.nlp.tokenizers import Tokenizer
 from sumy.summarizers.lsa import LsaSummarizer
@@ -9,17 +9,11 @@ DEFAULT_OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 DEFAULT_OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct")
 
 def ensure_nltk_resources():
-    try:
-        nltk.data.find("tokenizers/punkt")
-    except LookupError:
-        nltk.download("punkt", quiet=True)
-    try:
-        nltk.data.find("tokenizers/punkt_tab/english")
-    except LookupError:
+    for res in ["tokenizers/punkt", "tokenizers/punkt_tab"]:
         try:
-            nltk.download("punkt_tab", quiet=True)
-        except Exception:
-            pass
+            nltk.data.find(res)
+        except LookupError:
+            nltk.download(res.split("/")[-1], quiet=True)
 
 def detect_lang(text: str) -> str:
     if not text:
@@ -44,7 +38,8 @@ def extractive_summarize(text: str, ratio: float = 0.25):
         return text
     try:
         ensure_nltk_resources()
-        parser = PlaintextParser.from_string(text, Tokenizer("english"))
+        tokenizer_lang = "arabic" if lang == "ar" else "english"
+        parser = PlaintextParser.from_string(text, Tokenizer(tokenizer_lang))
         target = max(3, int(len(list(parser.document.sentences)) * ratio))
         target = min(target, 12)
         summarizer = LsaSummarizer()
@@ -115,24 +110,40 @@ def _chunk_text(text: str, max_chars: int = 8000):
         start = end
     return [c for c in chunks if c]
 
-def ollama_generate(prompt: str, ollama_url: str, model: str, num_predict: int, temperature: float = 0.0):
-    url = ollama_url.rstrip("/") + "/api/generate"
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": temperature,
-            "num_predict": num_predict,
-        }
+def ollama_generate(prompt: str, ollama_url: str, model: str, num_predict: int, api_key: str = "", temperature: float = 0.0):
+    url = ollama_url.rstrip("/")
+    is_cloud = "ollama.com" in url.lower()
+    
+    headers = _ollama_headers(api_key)
+    client = ollama.Client(host=url, headers=headers)
+    
+    options = {
+        "temperature": temperature,
+        "num_predict": num_predict,
     }
-    r = requests.post(url, json=payload, headers=_ollama_headers(ollama_api_key), timeout=600)
-    r.raise_for_status()
-    data = r.json()
-    return (data.get("response") or "").strip()
+
+    if is_cloud:
+        # Using chat API for cloud as recommended
+        response = client.chat(
+            model=model,
+            messages=[{'role': 'user', 'content': prompt}],
+            stream=False,
+            options=options
+        )
+        return response['message']['content'].strip()
+    else:
+        # Standard generate for local/other
+        response = client.generate(
+            model=model,
+            prompt=prompt,
+            stream=False,
+            options=options
+        )
+        return response['response'].strip()
 
 def ollama_summarize(text: str, length: str = "medium", content_lang: str = "auto",
-                    style: str = "both", ollama_url: str = DEFAULT_OLLAMA_URL, model: str = DEFAULT_OLLAMA_MODEL):
+                    style: str = "both", ollama_url: str = DEFAULT_OLLAMA_URL,
+                    model: str = DEFAULT_OLLAMA_MODEL, api_key: str = ""):
     text = (text or "").strip()
     if not text:
         return "", "en"
@@ -144,19 +155,20 @@ def ollama_summarize(text: str, length: str = "medium", content_lang: str = "aut
     partial = []
     for ch in chunks:
         prompt = _build_prompt(lang, style, length, ch)
-        partial.append(ollama_generate(prompt, ollama_url, model, num_predict=num_predict))
+        partial.append(ollama_generate(prompt, ollama_url, model, num_predict=num_predict, api_key=api_key))
 
     if len(partial) == 1:
         return partial[0], lang
 
     merged = "\n\n".join(partial)
     reduce_prompt = _build_prompt(lang, style, length, merged)
-    final = ollama_generate(reduce_prompt, ollama_url, model, num_predict=num_predict)
+    final = ollama_generate(reduce_prompt, ollama_url, model, num_predict=num_predict, api_key=api_key)
     return final, lang
 
 def summarize_text(text: str, ratio: float = 0.25, length: str = "medium", content_lang: str = "auto",
                    engine: str = "ollama_local", mode: str = "fallback", style: str = "both",
-                   ollama_url: str = DEFAULT_OLLAMA_URL, model: str = DEFAULT_OLLAMA_MODEL):
+                   ollama_url: str = DEFAULT_OLLAMA_URL, model: str = DEFAULT_OLLAMA_MODEL,
+                   ollama_api_key: str = ""):
     text = (text or "").strip()
     if not text:
         return "", "en", engine, ""
@@ -169,7 +181,7 @@ def summarize_text(text: str, ratio: float = 0.25, length: str = "medium", conte
     try:
         out, _lang = ollama_summarize(
             text, length=length, content_lang=content_lang, style=style,
-            ollama_url=ollama_url, model=model
+            ollama_url=ollama_url, model=model, api_key=ollama_api_key
         )
         return out, detected, "ollama", ""
     except Exception as e:
@@ -180,8 +192,15 @@ def summarize_text(text: str, ratio: float = 0.25, length: str = "medium", conte
 
 def _ollama_headers(api_key: str) -> dict:
     api_key = (api_key or "").strip()
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
     if not api_key:
-        return {"Content-Type": "application/json"}
+        return headers
+    
     if api_key.lower().startswith("bearer "):
-        return {"Content-Type": "application/json", "Authorization": api_key}
-    return {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
+        headers["Authorization"] = api_key
+    else:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers

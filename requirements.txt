@@ -8,3 +8,6 @@ sumy
 nltk
 numpy
 requests
+ollama
+python-dotenv
+a2wsgi
