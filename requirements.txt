@@ -11,3 +11,4 @@ requests
 ollama
 python-dotenv
 a2wsgi
+fpdf2

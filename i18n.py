@@ -48,6 +48,9 @@ TRANSLATIONS = {
     "err_cloud_requires_url_model":"Cloud mode requires Ollama URL and Model.",
     "err_cloud_requires_key":"OLLAMA_API_KEY is missing in .env file.",
     "loading":"Summarizing... Please wait",
+    "upload_file":"Upload File",
+    "upload_hint":"Upload a PDF or DOCX file (optional)",
+    "export_pdf":"Export to PDF",
   },
   "ar": {
     "app_title":"نظام تلخيص النصوص",
@@ -98,6 +101,9 @@ TRANSLATIONS = {
     "err_cloud_requires_url_model":"وضع السحابة يتطلب رابط أولاما والموديل.",
     "err_cloud_requires_key":"مفتاح OLLAMA_API_KEY غير موجود في ملف .env",
     "loading":"جاري التلخيص... يرجى الانتظار",
+    "upload_file":"رفع ملف",
+    "upload_hint":"ارفع ملف PDF أو DOCX (اختياري)",
+    "export_pdf":"تصدير إلى PDF",
   }
 }
 

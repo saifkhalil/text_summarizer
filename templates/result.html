@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Cairo:wght@400;600&display=swap" rel="stylesheet">
+  <link href="https://cdn.quilljs.com/1.3.7/quill.snow.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 
@@ -19,17 +20,22 @@
         <div class="brand-dot"></div>
         <div>
           <div class="h5 mb-0">{{ t("result_title") }}</div>
-          <div class="text-muted small">
-            {% if not error %}
-              {{ t("engine") }}: {{ used_engine }} · {{ t("content_lang") }}: {{ content_lang }} · {{ t("ollama_model") }}: {{ model }}
-            {% else %}
-              {{ t("app_title") }}
-            {% endif %}
-          </div>
         </div>
       </div>
 
       <div class="d-flex align-items-center gap-2">
+        <button id="toggleOriginal" class="btn btn-ghost btn-sm d-flex align-items-center gap-1">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-eye" viewBox="0 0 16 16" id="eyeIcon">
+            <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8M1.173 8a13 13 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5s3.879 1.168 5.168 2.457A13 13 0 0 1 14.828 8q-.086.13-.195.288c-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5s-3.879-1.168-5.168-2.457A13 13 0 0 1 1.172 8z"/>
+            <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0"/>
+          </svg>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-eye-slash" viewBox="0 0 16 16" id="eyeSlashIcon" style="display:none;">
+            <path d="M13.359 11.238C15.06 9.72 16 8 16 8s-3-5.5-8-5.5a7 7 0 0 0-2.79.588l.77.771A6 6 0 0 1 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13 13 0 0 1 14.828 8q-.086.13-.195.288c-.335.48-.83 1.12-1.465 1.755q-.247.248-.517.486z"/>
+            <path d="M11.297 9.176a3.5 3.5 0 0 0-4.474-4.474l.823.823a2.5 2.5 0 0 1 2.829 2.829zm-2.943 1.299.533.533a2.5 2.5 0 0 1-2.83-2.83l.533.533a1.5 1.5 0 0 0 1.764 1.765"/>
+            <path d="M5.177 6.246a7 7 0 0 0-1.561 1.144C2.332 8.72 1.3 10.3 1.3 10.3s3 5.5 8 5.5a7 7 0 0 0 2.228-.368l-.564-.564a6 6 0 0 1-1.664.332c-2.13 0-3.89-1.168-5.178-2.457A13 13 0 0 1 1.172 10.3q.085-.13.195-.288c.335-.48.83-1.12 1.465-1.755q.231-.231.478-.444zm9.64 9.641-11-11L4.5 4.99l11 11z"/>
+          </svg>
+          <span>{{ t("original_text") }}</span>
+        </button>
         <button id="themeToggle" type="button" class="btn btn-ghost btn-sm"
                 onclick="window.__toggleTheme && window.__toggleTheme()" aria-pressed="false" title="Theme">
           🌙
@@ -37,7 +43,20 @@
         <a class="btn btn-ghost btn-sm" href="/?ui_lang={{ 'en' if ui_lang == 'ar' else 'ar' }}">
           {{ 'English' if ui_lang == 'ar' else 'العربية' }}
         </a>
-        <a class="btn btn-ghost btn-sm" href="/?ui_lang={{ ui_lang }}">{{ t("back") }}</a>
+        {% if not error and summary %}
+        <form id="exportPdfForm" action="/export-pdf" method="post" style="display:inline;">
+          <input type="hidden" name="summary" id="exportSummary" value=""/>
+          <input type="hidden" name="original" value="{{ original }}"/>
+          <input type="hidden" name="ui_lang" value="{{ ui_lang }}"/>
+          <button type="submit" class="btn btn-ghost text-danger btn-sm" title="{{ t('export_pdf') }}">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-filetype-pdf" viewBox="0 0 16 16">
+              <path fill-rule="evenodd" d="M14 4.5V14a2 2 0 0 1-2 2h-1v-1h1a1 1 0 0 0 1-1V4.5h-2A1.5 1.5 0 0 1 9.5 3V1H4a1 1 0 0 0-1 1v9H2V2a2 2 0 0 1 2-2h5.5zM1.6 11.85H0v3.999h.791v-1.342h.803q.43 0 .732-.173.305-.175.463-.474a1.4 1.4 0 0 0 .161-.677q0-.375-.158-.677a1.2 1.2 0 0 0-.46-.477q-.3-.18-.732-.179m.545 1.333a.8.8 0 0 1-.085.38.57.57 0 0 1-.238.241.8.8 0 0 1-.375.082H.788V12.48h.66q.327 0 .512.181.185.183.185.522m1.217-1.333v3.999h1.46q.602 0 .998-.237a1.45 1.45 0 0 0 .595-.689q.196-.45.196-1.084 0-.63-.196-1.075a1.43 1.43 0 0 0-.589-.68q-.396-.234-1.005-.234zm.791.645h.563q.371 0 .609.152a.9.9 0 0 1 .354.454q.118.302.118.753a2.3 2.3 0 0 1-.068.592 1.1 1.1 0 0 1-.196.422.8.8 0 0 1-.334.252 1.3 1.3 0 0 1-.483.082h-.563zm3.743 1.763v1.591h-.79V11.85h2.548v.653H7.896v1.117h1.606v.638z"/>
+            </svg>
+          </button>
+        </form>
+        {% endif %}
+              <a class="btn btn-ghost btn-sm" href="/?ui_lang={{ ui_lang }}">{{ t("back") }}</a>
+
       </div>
     </div>
 
@@ -56,9 +75,9 @@
         </div>
       {% endif %}
 
-      <div class="row g-4">
-        <div class="col-lg-6">
-          <div class="card glass-card shadow-sm h-100">
+      <div class="row g-4" id="resultRow">
+        <div class="col-lg-6" id="originalCol">
+          <div class="card glass-card shadow-sm">
             <div class="card-body p-4">
               <div class="d-flex align-items-center justify-content-between mb-2">
                 <div class="section-title">{{ t("original_text") }}</div>
@@ -69,14 +88,14 @@
           </div>
         </div>
 
-        <div class="col-lg-6">
-          <div class="card glass-card shadow-sm h-100">
+        <div class="col-lg-6" id="summaryCol">
+          <div class="card glass-card shadow-sm">
             <div class="card-body p-4">
               <div class="d-flex align-items-center justify-content-between mb-2">
                 <div class="section-title">{{ t("summary") }}</div>
-                <div class="text-muted small">{{ t("words") }}: {{ wc_summary }}</div>
+                <div class="text-muted small" id="summaryWordCount">{{ t("words") }}: {{ wc_summary }}</div>
               </div>
-              <pre>{{ summary }}</pre>
+              <div id="summaryEditor" class="ql-editor-content">{{ summary | safe }}</div>
             </div>
           </div>
         </div>
@@ -85,5 +104,159 @@
   </div>
 
   <script src="/static/theme.js"></script>
+  <script src="https://cdn.quilljs.com/1.3.7/quill.min.js"></script>
+  <script>
+  (function(){
+    const editor_container = document.getElementById('summaryEditor');
+    const export_summary = document.getElementById('exportSummary');
+    const word_count_el = document.getElementById('summaryWordCount');
+    const words_label = "{{ t('words') }}";
+    
+    if (editor_container) {
+      // Initialize Quill rich text editor
+      const quill = new Quill('#summaryEditor', {
+        theme: 'snow',
+        modules: {
+          toolbar: [
+            ['bold', 'italic', 'underline', 'strike'],
+            [{ 'header': [1, 2, 3, false] }],
+            [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+            [{ 'color': [] }, { 'background': [] }],
+            [{ 'align': [] }],
+            ['clean']
+          ]
+        },
+        placeholder: 'Edit your summary here...'
+      });
+
+      // Set initial HTML value to hidden field
+      if (export_summary) {
+        export_summary.value = quill.root.innerHTML;
+      }
+      
+      // Update hidden field and word count when editor changes
+      quill.on('text-change', function() {
+        const text = quill.getText().trim();
+        const html = quill.root.innerHTML;
+        if (export_summary) {
+          export_summary.value = html;
+        }
+        if (word_count_el) {
+          const count = text.split(/\s+/).filter(w => w.length > 0).length;
+          word_count_el.textContent = words_label + ': ' + count;
+        }
+      });
+
+      window._quill = quill; // Make it accessible for toggle
+    }
+
+    // Toggle Original Text visibility
+    const toggleBtn = document.getElementById('toggleOriginal');
+    const originalCol = document.getElementById('originalCol');
+    const summaryCol = document.getElementById('summaryCol');
+    const eyeIcon = document.getElementById('eyeIcon');
+    const eyeSlashIcon = document.getElementById('eyeSlashIcon');
+
+    if (toggleBtn && originalCol && summaryCol) {
+      // Load preference from localStorage
+      const isOriginalHidden = localStorage.getItem('hideOriginal') === 'true';
+      if (isOriginalHidden) {
+        applyToggle(true);
+      }
+
+      toggleBtn.addEventListener('click', () => {
+        const currentlyHidden = originalCol.style.display === 'none';
+        applyToggle(!currentlyHidden);
+      });
+
+      function applyToggle(hide) {
+        if (hide) {
+          originalCol.style.display = 'none';
+          summaryCol.classList.replace('col-lg-6', 'col-lg-12');
+          eyeIcon.style.display = 'none';
+          eyeSlashIcon.style.display = 'inline';
+          localStorage.setItem('hideOriginal', 'true');
+        } else {
+          originalCol.style.display = 'block';
+          summaryCol.classList.replace('col-lg-12', 'col-lg-6');
+          eyeIcon.style.display = 'inline';
+          eyeSlashIcon.style.display = 'none';
+          localStorage.setItem('hideOriginal', 'false');
+        }
+        // Redraw Quill if needed (sometimes needed for layout changes)
+        if (window._quill && window._quill.update) window._quill.update();
+      }
+    }
+  })();
+  </script>
+  <style>
+    #summaryEditor .ql-editor {
+      min-height: 200px;
+      font-family: inherit;
+    }
+    .ql-toolbar.ql-snow {
+      border-radius: 8px 8px 0 0;
+      border-color: var(--border);
+      background: var(--card-bg, var(--bg2));
+      padding: 8px;
+    }
+    .ql-snow .ql-toolbar .ql-formats {
+      margin-right: 12px;
+    }
+    .ql-container.ql-snow {
+      border-radius: 0 0 8px 8px;
+      border-color: var(--border);
+      background: var(--card-bg, var(--bg2));
+    }
+    .ql-editor {
+      color: var(--text);
+    }
+    .ql-snow .ql-stroke {
+      stroke: var(--text-muted, var(--muted));
+    }
+    .ql-snow .ql-fill {
+      fill: var(--text-muted, var(--muted));
+    }
+    .ql-snow .ql-picker {
+      color: var(--text-muted, var(--muted));
+    }
+    /* Fix missing icons in dark mode/bootstrap override */
+    .ql-snow .ql-picker-options {
+      background-color: var(--bg2);
+      border-color: var(--border);
+    }
+    .ql-snow.ql-toolbar button:hover,
+    .ql-snow .ql-toolbar button:hover,
+    .ql-snow.ql-toolbar button:focus,
+    .ql-snow .ql-toolbar button:focus,
+    .ql-snow.ql-toolbar button.ql-active,
+    .ql-snow .ql-toolbar button.ql-active,
+    .ql-snow.ql-toolbar .ql-picker-label:hover,
+    .ql-snow .ql-toolbar .ql-picker-label:hover,
+    .ql-snow.ql-toolbar .ql-picker-label.ql-active,
+    .ql-snow .ql-toolbar .ql-picker-label.ql-active,
+    .ql-snow.ql-toolbar .ql-picker-item:hover,
+    .ql-snow .ql-toolbar .ql-picker-item:hover,
+    .ql-snow.ql-toolbar .ql-picker-item.ql-active,
+    .ql-snow .ql-toolbar .ql-picker-item.ql-active {
+      color: var(--brand1);
+    }
+    .ql-snow.ql-toolbar button:hover .ql-stroke,
+    .ql-snow .ql-toolbar button:hover .ql-stroke,
+    .ql-snow.ql-toolbar button:focus .ql-stroke,
+    .ql-snow .ql-toolbar button:focus .ql-stroke,
+    .ql-snow.ql-toolbar button.ql-active .ql-stroke,
+    .ql-snow .ql-toolbar button.ql-active .ql-stroke,
+    .ql-snow.ql-toolbar .ql-picker-label:hover .ql-stroke,
+    .ql-snow .ql-toolbar .ql-picker-label:hover .ql-stroke,
+    .ql-snow.ql-toolbar .ql-picker-label.ql-active .ql-stroke,
+    .ql-snow .ql-toolbar .ql-picker-label.ql-active .ql-stroke,
+    .ql-snow.ql-toolbar .ql-picker-item:hover .ql-stroke,
+    .ql-snow .ql-toolbar .ql-picker-item:hover .ql-stroke,
+    .ql-snow.ql-toolbar .ql-picker-item.ql-active .ql-stroke,
+    .ql-snow .ql-toolbar .ql-picker-item.ql-active .ql-stroke {
+      stroke: var(--brand1);
+    }
+  </style>
 </body>
 </html>

@@ -48,24 +48,6 @@
               <div class="section-title mb-2">Settings</div>
               <div class="row g-3 mb-3">
                 <div class="col-md-6">
-                  <label class="form-label label-muted">{{ t("engine") }}</label>
-                  <select class="form-select form-select-modern" name="engine" id="engineSelect">
-                    <option value="ollama_local" selected>{{ t("engine_ollama_local") }}</option>
-                    <option value="ollama_cloud">{{ t("engine_ollama_cloud") }}</option>
-                    <option value="extractive">{{ t("engine_extractive") }}</option>
-                  </select>
-                </div>
-
-                <div class="col-md-6">
-                  <label class="form-label label-muted">{{ t("content_lang") }}</label>
-                  <select class="form-select form-select-modern" name="content_lang">
-                    <option value="auto" selected>{{ t("auto") }}</option>
-                    <option value="ar">{{ t("arabic") }}</option>
-                    <option value="en">{{ t("english") }}</option>
-                  </select>
-                </div>
-
-                <div class="col-md-6">
                   <label class="form-label label-muted">{{ t("summary_length") }}</label>
                   <select class="form-select form-select-modern" name="length">
                     <option value="short">{{ t("short") }}</option>
@@ -84,24 +66,10 @@
                 </div>
               </div>
 
-              <div class="row g-3 mb-4">
-                <div class="col-md-6" id="ollamaUrlGroup">
-                  <label class="form-label label-muted">{{ t("ollama_url") }}</label>
-                  <input class="form-control form-control-modern" name="ollama_url" id="ollamaUrl" value="http://localhost:11434"/>
-                </div>
-                <div class="col-md-6" id="ollamaModelGroup">
-                  <label class="form-label label-muted">{{ t("ollama_model") }}</label>
-                  <input class="form-control form-control-modern" name="model" id="ollamaModel" value="qwen2.5:3b-instruct"/>
-                  <select class="form-select form-select-modern" id="ollamaModelList" style="display:none;"></select>
-                </div>
-                <div class="col-12">
-                  <div class="note">
-                    {{ t("ollama_note") }}
-                    <div id="ollamaModelHint" class="small text-muted mt-1">
-                      Recommended: <code>qwen2.5:7b-instruct</code> · Fast: <code>qwen2.5:3b-instruct</code>
-                    </div>
-                  </div>
-                </div>
+              <div class="section-title mb-2">{{ t("upload_file") }}</div>
+              <div class="mb-3">
+                <input type="file" class="form-control form-control-modern" name="file" accept=".pdf,.docx"/>
+                <div class="form-text text-muted">{{ t("upload_hint") }}</div>
               </div>
 
               <div class="section-title mb-2">{{ t("write_text") }}</div>
@@ -127,129 +95,17 @@
 
   <script>
 (function(){
-  function setVisible(el, visible){
-    if(!el) return;
-    el.style.display = visible ? "block" : "none";
-  }
-
-  function updateOllamaForm(){
-    const engine = document.getElementById("engineSelect")?.value || "ollama_local";
-
-    const url = document.getElementById("ollamaUrl");
-    const modelInput = document.getElementById("ollamaModel");
-    const modelList = document.getElementById("ollamaModelList");
-
-    const hint = document.getElementById("ollamaModelHint");
-
-    const isOllama = (engine === "ollama_local" || engine === "ollama_cloud");
-    const isCloud  = (engine === "ollama_cloud");
-
-    if(hint){
-      if(isCloud){
-        hint.innerHTML = 'Recommended: <code>gpt-oss:120b</code> · Fast: <code>gpt-oss:20b</code>';
-      } else {
-        hint.innerHTML = 'Recommended: <code>qwen2.5:7b-instruct</code> · Fast: <code>qwen2.5:3b-instruct</code>';
-      }
-    }
-
-    if(url){
-      url.disabled = !isOllama;
-      if(isCloud){
-        url.value = "https://ollama.com/";
-        url.readOnly = true;
-      } else {
-        url.readOnly = false;
-        if(url.value === "https://ollama.com/") {
-          url.value = "http://localhost:11434";
-        }
-      }
-      url.placeholder = isCloud ? "{{ t('ollama_url_cloud_ph') }}" : "{{ t('ollama_url_local_ph') }}";
-    }
-
-    if(modelInput && modelList){
-      modelInput.disabled = !isOllama;
-      if(isCloud){
-        modelInput.style.display = "none";
-        modelInput.name = ""; // Remove name so it's not submitted
-        modelList.style.display = "block";
-        modelList.name = "model"; // Give name to the select
-        modelList.disabled = false;
-        fetchCloudModels();
-      } else {
-        modelInput.style.display = "block";
-        modelInput.name = "model";
-        modelList.style.display = "none";
-        modelList.name = "";
-        modelList.disabled = true;
-      }
-    }
-  }
-
-  async function fetchCloudModels(){
-    const modelList = document.getElementById("ollamaModelList");
-    if(!modelList) return;
-
-    // Only fetch if it's empty or only has the loading/fallback message
-    if (modelList.options.length > 1 && modelList.value !== "") return;
-
-    modelList.innerHTML = '<option value="">Loading models...</option>';
-    try {
-      const resp = await fetch("/api/models");
-      const data = await resp.json();
-      if(data && data.models){
-        modelList.innerHTML = "";
-        data.models.forEach(m => {
-          const opt = document.createElement("option");
-          opt.value = m.name;
-          opt.textContent = m.name;
-          if(m.name === "gpt-oss:20b") opt.selected = true;
-          modelList.appendChild(opt);
-        });
-      }
-    } catch(e) {
-      console.error("Failed to fetch models", e);
-      modelList.innerHTML = '<option value="gpt-oss:120b">gpt-oss:120b</option>';
-    }
-  }
-
-  function showFormError(msg){
-    const host = document.getElementById("formErrorHost");
-    if(!host) return alert(msg);
-    host.innerHTML = '<div class="alert mt-3"><div class="fw-semibold">'+msg+'</div></div>';
-  }
-
-  function validateBeforeSubmit(ev){
-    const engine = document.getElementById("engineSelect")?.value || "ollama_local";
-    
-    // Check if cloud mode requirements are met
-    if(engine === "ollama_cloud") {
-      const url = (document.getElementById("ollamaUrl")?.value || "").trim();
-      let model = (document.getElementById("ollamaModelList")?.value || "").trim();
-
-      if(!url || !model){
-        ev.preventDefault();
-        showFormError("{{ t('err_cloud_requires_url_model') }}");
-        return false;
-      }
-    }
-
-    // If validation passes, show loading overlay
+  function showLoading(ev){
     const overlay = document.getElementById("loadingOverlay");
     if (overlay) {
       overlay.setAttribute("style", "display: flex !important;");
     }
-    
     return true;
   }
 
   document.addEventListener("DOMContentLoaded", function(){
-    const sel = document.getElementById("engineSelect");
     const form = document.querySelector("form[action='/summarize']");
-
-    if(sel) sel.addEventListener("change", updateOllamaForm);
-    if(form) form.addEventListener("submit", validateBeforeSubmit);
-
-    updateOllamaForm();
+    if(form) form.addEventListener("submit", showLoading);
   });
 })();
 </script>
