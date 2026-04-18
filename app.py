@@ -41,10 +41,16 @@ def safe_ui_lang(lang: str) -> str:
     return lang if lang in ("en","ar") else "en"
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request, ui_lang: str="en"):
+def index(request: Request, ui_lang: str = "en"):
     ui_lang = safe_ui_lang(ui_lang)
-    return templates.TemplateResponse("index.html", {"request":request, "ui_lang":ui_lang, "t":lambda k: t(ui_lang,k)})
-
+    return templates.TemplateResponse(
+        request,
+        "index.html",
+        {
+            "ui_lang": ui_lang,
+            "t": lambda k: t(ui_lang, k),
+        }
+    )
 @app.get("/api/models")
 def get_cloud_models():
     try:
