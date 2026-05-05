@@ -1,24 +1,33 @@
-import os, uuid, re
+"""FastAPI app for the Text Summarization System (Ollama Cloud)."""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+import uuid
+from typing import Optional
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
-from fastapi import FastAPI, Request, UploadFile, File, Form
-from fastapi.responses import HTMLResponse, Response
-from fastapi.templating import Jinja2Templates
+import bleach
+import markdown as md_lib
+from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from fpdf import FPDF
 
-class MyFPDF(FPDF):
-    pass
-
-from file_extractors import extract_text_from_pdf, extract_text_from_docx
-from summarizer import summarize_text
+from file_extractors import extract_text_from_docx, extract_text_from_pdf
 from i18n import t
-import requests
+from summarizer import summarize_text, summarize_text_stream
 
-# Load settings from .env
-SUMMARIZATION_ENGINE = os.getenv("SUMMARIZATION_ENGINE", "ollama_local")
-CONTENT_LANGUAGE = os.getenv("CONTENT_LANGUAGE", "auto")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
+
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct")
 OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "")
@@ -27,21 +36,132 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+ALLOWED_EXTS = {".pdf", ".docx"}
+VALID_LENGTHS = {"short", "medium", "long"}
+VALID_STYLES = {"paragraph", "bullets", "both"}
+
+ALLOWED_HTML_TAGS = [
+    "p", "br", "hr", "strong", "em", "b", "i", "u", "s", "del",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+    "ul", "ol", "li", "blockquote", "code", "pre", "span", "div", "mark",
+]
+ALLOWED_HTML_ATTRS = {"*": ["class", "style"], "span": ["class", "style"]}
+
+
+def markdown_to_html(text: str) -> str:
+    if not text:
+        return ""
+    if "<" in text and ">" in text and any(tag in text.lower() for tag in ("<p", "<ul", "<ol", "<h1", "<h2", "<h3", "<strong", "<em")):
+        # Already HTML-ish; sanitize and return.
+        return bleach.clean(text, tags=ALLOWED_HTML_TAGS, attributes=ALLOWED_HTML_ATTRS, strip=True)
+    html = md_lib.markdown(text, extensions=["extra", "sane_lists", "nl2br"])
+    return bleach.clean(html, tags=ALLOWED_HTML_TAGS, attributes=ALLOWED_HTML_ATTRS, strip=True)
+
 app = FastAPI(title="Text Summarization System")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 def word_count(s: str) -> int:
     return len((s or "").split())
 
-def get_ratio(length: str) -> float:
-    return {"short":0.15, "medium":0.25, "long":0.40}.get(length, 0.25)
 
 def safe_ui_lang(lang: str) -> str:
-    return lang if lang in ("en","ar") else "en"
+    return lang if lang in ("en", "ar") else "en"
 
+
+def _normalize_choice(value: str, allowed: set[str], default: str) -> str:
+    return value if value in allowed else default
+
+
+def _i18n_for(ui_lang: str) -> dict:
+    """Build i18n payload for client-side use."""
+    keys = [
+        "status_received", "status_extracting", "status_extracted",
+        "status_summarizing", "status_merging", "status_done",
+        "cancel", "cancelled", "new_summary", "loading",
+        "summary", "original_text", "words", "result_title",
+        "export_pdf", "back", "error_ollama",
+    ]
+    return {k: t(ui_lang, k) for k in keys}
+
+
+def render_result(request: Request, ui_lang: str, *, error: str = "",
+                  engine_error: str = "", original: str = "",
+                  summary: str = "") -> HTMLResponse:
+    return templates.TemplateResponse("result.html", {
+        "request": request,
+        "ui_lang": ui_lang,
+        "t": lambda k: t(ui_lang, k),
+        "error": error,
+        "engine_error": engine_error,
+        "original": original,
+        "summary": summary,
+        "wc_original": word_count(original),
+        "wc_summary": word_count(summary),
+    })
+
+
+async def _save_upload(file: UploadFile) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Save an upload to disk with size limit. Returns (path, ext, error_key)."""
+    ext = os.path.splitext((file.filename or "").lower())[1]
+    if ext not in ALLOWED_EXTS:
+        return None, None, None
+    path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}{ext}")
+    size = 0
+    try:
+        with open(path, "wb") as fh:
+            while True:
+                chunk = await file.read(64 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    fh.close()
+                    _safe_remove(path)
+                    return None, None, "err_file_too_large"
+                fh.write(chunk)
+    except Exception:
+        logger.exception("Failed saving upload")
+        _safe_remove(path)
+        return None, None, "no_text"
+    return path, ext, None
+
+
+def _extract_text(path: str, ext: str) -> str:
+    if ext == ".pdf":
+        return extract_text_from_pdf(path)
+    if ext == ".docx":
+        return extract_text_from_docx(path)
+    return ""
+
+
+def _safe_remove(path: Optional[str]) -> None:
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _validate_ollama_settings(ui_lang: str) -> Optional[str]:
+    if not OLLAMA_URL.strip() or not OLLAMA_MODEL.strip():
+        return t(ui_lang, "err_cloud_requires_url_model")
+    if not OLLAMA_API_KEY.strip():
+        return t(ui_lang, "err_cloud_requires_key")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request, ui_lang: str = "en"):
+def index(request: Request, ui_lang: str = "en") -> HTMLResponse:
     ui_lang = safe_ui_lang(ui_lang)
     return templates.TemplateResponse(
         request,
@@ -49,237 +169,283 @@ def index(request: Request, ui_lang: str = "en"):
         {
             "ui_lang": ui_lang,
             "t": lambda k: t(ui_lang, k),
-        }
+            "i18n_json": json.dumps(_i18n_for(ui_lang)),
+        },
     )
-@app.get("/api/models")
-def get_cloud_models():
-    try:
-        resp = requests.get("https://ollama.com/api/tags", timeout=5)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        return {"models": [], "error": str(e)}
+
 
 @app.post("/summarize", response_class=HTMLResponse)
 async def summarize(
     request: Request,
     ui_lang: str = Form(default="en"),
-    mode: str = Form(default="fallback"),
     style: str = Form(default="both"),
     input_text: str = Form(default=""),
     length: str = Form(default="medium"),
     file: UploadFile = File(default=None),
-):
-    # Use settings from .env
-    engine = SUMMARIZATION_ENGINE
-    content_lang = CONTENT_LANGUAGE
-    ollama_url = OLLAMA_URL
-    model = OLLAMA_MODEL
-    ollama_api_key = OLLAMA_API_KEY
-    
+) -> HTMLResponse:
+    """Non-streaming fallback used when JS is unavailable."""
     ui_lang = safe_ui_lang(ui_lang)
-    content_lang = content_lang if content_lang in ("auto","en","ar") else "auto"
-    engine = engine if engine in ("ollama_local","ollama_cloud","ollama","extractive") else "ollama_local"
-    if engine == "ollama":
-        engine = "ollama_local"
-    mode = mode if mode in ("strict","fallback") else "fallback"
-    style = style if style in ("paragraph","bullets","both") else "both"
+    style = _normalize_choice(style, VALID_STYLES, "both")
+    length = _normalize_choice(length, VALID_LENGTHS, "medium")
+
+    settings_err = _validate_ollama_settings(ui_lang)
+    if settings_err:
+        return render_result(request, ui_lang, error=settings_err)
 
     text = (input_text or "").strip()
-    
-    # Server-side validation for Cloud mode
-    if engine == "ollama_cloud":
-        if not (ollama_url or "").strip() or not (model or "").strip():
-            return templates.TemplateResponse("result.html", {
-                "request":request,"ui_lang":ui_lang,"t":lambda k: t(ui_lang,k),
-                "error": t(ui_lang,"err_cloud_requires_url_model"),"engine_error":"",
-                "original":text,"summary":"",
-                "wc_original":word_count(text),"wc_summary":0,"detected_lang":"","content_lang":content_lang,
-                "length":length,"engine":engine,"used_engine":engine,"mode":mode,"style":style,
-                "model":model
-            })
-        if not (ollama_api_key or "").strip():
-            return templates.TemplateResponse("result.html", {
-                "request":request,"ui_lang":ui_lang,"t":lambda k: t(ui_lang,k),
-                "error": t(ui_lang, "err_cloud_requires_key"),"engine_error":"",
-                "original":text,"summary":"",
-                "wc_original":word_count(text),"wc_summary":0,"detected_lang":"","content_lang":content_lang,
-                "length":length,"engine":engine,"used_engine":engine,"mode":mode,"style":style,
-                "model":model
-            })
-
+    upload_path: Optional[str] = None
     if file and file.filename:
-        ext = os.path.splitext(file.filename.lower())[1]
-        path = os.path.join(UPLOAD_DIR, str(uuid.uuid4()) + ext)
-        with open(path, "wb") as f:
-            f.write(await file.read())
-        if ext == ".pdf":
-            text = extract_text_from_pdf(path)
-        elif ext == ".docx":
-            text = extract_text_from_docx(path)
+        upload_path, ext, err_key = await _save_upload(file)
+        if err_key:
+            return render_result(request, ui_lang, error=t(ui_lang, err_key))
+        if upload_path and ext:
+            text = _extract_text(upload_path, ext) or text
+            _safe_remove(upload_path)
 
     if not text:
-        return templates.TemplateResponse("result.html", {
-            "request":request,"ui_lang":ui_lang,"t":lambda k: t(ui_lang,k),
-            "error": t(ui_lang,"no_text"),"engine_error":"","original":"","summary":"",
-            "wc_original":0,"wc_summary":0,"detected_lang":"","content_lang":content_lang,
-            "length":length,"engine":engine,"used_engine":"","mode":mode,"style":style,
-            "model":model
-        })
+        return render_result(request, ui_lang, error=t(ui_lang, "no_text"))
 
-    summary, detected_lang, used_engine, engine_error = summarize_text(
-        text, ratio=get_ratio(length), length=length, content_lang=content_lang,
-        engine=engine, mode=mode, style=style, ollama_url=ollama_url, model=model, ollama_api_key=ollama_api_key
+    summary, _engine, engine_error = summarize_text(
+        text, length=length, style=style, content_lang="auto",
+        ollama_url=OLLAMA_URL, model=OLLAMA_MODEL, ollama_api_key=OLLAMA_API_KEY,
     )
 
-    if engine.startswith("ollama") and mode == "strict" and not summary:
-        return templates.TemplateResponse("result.html", {
-            "request":request,"ui_lang":ui_lang,"t":lambda k: t(ui_lang,k),
-            "error": t(ui_lang,"error_ollama"),"engine_error":engine_error,"original":text,"summary":"",
-            "wc_original":word_count(text),"wc_summary":0,"detected_lang":detected_lang,"content_lang":content_lang,
-            "length":length,"engine":engine,"used_engine":used_engine,"mode":mode,"style":style,
-            "model":model
-        })
-    
-    # General check: if summary is empty, show error instead of empty result
     if not summary:
-        error_msg = engine_error if engine_error else t(ui_lang,"no_text")
-        return templates.TemplateResponse("result.html", {
-            "request":request,"ui_lang":ui_lang,"t":lambda k: t(ui_lang,k),
-            "error": error_msg,"engine_error":"","original":text,"summary":"",
-            "wc_original":word_count(text),"wc_summary":0,"detected_lang":detected_lang,"content_lang":content_lang,
-            "length":length,"engine":engine,"used_engine":used_engine,"mode":mode,"style":style,
-            "model":model
-        })
+        return render_result(request, ui_lang,
+                             error=engine_error or t(ui_lang, "error_ollama"),
+                             original=text)
 
-    return templates.TemplateResponse("result.html", {
-        "request":request,"ui_lang":ui_lang,"t":lambda k: t(ui_lang,k),
-        "error":"", "engine_error": engine_error, "original":text, "summary":summary,
-        "wc_original":word_count(text),"wc_summary":word_count(summary),
-        "detected_lang":detected_lang,"content_lang":content_lang,
-        "length":length,"engine":engine,"used_engine":used_engine,"mode":mode,"style":style,
-        "model":model
-    })
+    return render_result(request, ui_lang, engine_error=engine_error,
+                         original=text, summary=markdown_to_html(summary))
 
+
+def _sse(event: dict) -> bytes:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+@app.post("/summarize-stream")
+async def summarize_stream(
+    request: Request,
+    ui_lang: str = Form(default="en"),
+    style: str = Form(default="both"),
+    input_text: str = Form(default=""),
+    length: str = Form(default="medium"),
+    file: UploadFile = File(default=None),
+) -> StreamingResponse:
+    """Server-Sent Events endpoint emitting status updates while summarizing."""
+    ui_lang = safe_ui_lang(ui_lang)
+    style = _normalize_choice(style, VALID_STYLES, "both")
+    length = _normalize_choice(length, VALID_LENGTHS, "medium")
+
+    # Read upload synchronously here so we can stream events about extraction.
+    upload_path: Optional[str] = None
+    upload_ext: Optional[str] = None
+    upload_err: Optional[str] = None
+    if file and file.filename:
+        upload_path, upload_ext, upload_err = await _save_upload(file)
+
+    initial_text = (input_text or "").strip()
+
+    async def event_generator():
+        path = upload_path
+        try:
+            settings_err = _validate_ollama_settings(ui_lang)
+            if settings_err:
+                yield _sse({"step": "error", "message": settings_err})
+                return
+
+            yield _sse({"step": "received"})
+
+            text = initial_text
+            if upload_err:
+                yield _sse({"step": "error", "message": t(ui_lang, upload_err)})
+                return
+            if path and upload_ext:
+                yield _sse({"step": "extracting"})
+                # offload blocking extraction
+                extracted = await asyncio.to_thread(_extract_text, path, upload_ext)
+                _safe_remove(path)
+                path = None
+                if extracted:
+                    text = extracted
+                    yield _sse({"step": "extracted", "chars": len(extracted)})
+                else:
+                    yield _sse({"step": "error", "message": t(ui_lang, "no_text")})
+                    return
+
+            if not text:
+                yield _sse({"step": "error", "message": t(ui_lang, "no_text")})
+                return
+
+            cancelled = {"value": False}
+
+            def is_cancelled() -> bool:
+                return cancelled["value"]
+
+            # Run blocking generator in a thread, ferry events through a queue.
+            queue: asyncio.Queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+
+            def producer() -> None:
+                try:
+                    for evt in summarize_text_stream(
+                        text, length=length, style=style, content_lang="auto",
+                        ollama_url=OLLAMA_URL, model=OLLAMA_MODEL,
+                        ollama_api_key=OLLAMA_API_KEY,
+                        is_cancelled=is_cancelled,
+                    ):
+                        if evt.get("step") == "done":
+                            evt = {**evt, "original": text}
+                        loop.call_soon_threadsafe(queue.put_nowait, evt)
+                except Exception as e:
+                    logger.exception("Producer crashed")
+                    loop.call_soon_threadsafe(queue.put_nowait,
+                                              {"step": "error", "message": str(e)})
+                finally:
+                    loop.call_soon_threadsafe(queue.put_nowait, None)
+
+            task = asyncio.create_task(asyncio.to_thread(producer))
+
+            try:
+                while True:
+                    try:
+                        evt = await asyncio.wait_for(queue.get(), timeout=0.5)
+                    except asyncio.TimeoutError:
+                        if await request.is_disconnected():
+                            cancelled["value"] = True
+                            logger.info("Client disconnected; cancelling summarization")
+                            break
+                        # heartbeat keeps proxies from closing the stream
+                        yield b": ping\n\n"
+                        continue
+
+                    if evt is None:
+                        break
+
+                    yield _sse(evt)
+
+                    if evt.get("step") in ("done", "error", "cancelled"):
+                        break
+
+                    if await request.is_disconnected():
+                        cancelled["value"] = True
+                        break
+            finally:
+                cancelled["value"] = True
+                try:
+                    await task
+                except Exception:
+                    logger.exception("Producer task error")
+        finally:
+            _safe_remove(path)
+
+    headers = {
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    }
+    return StreamingResponse(event_generator(), media_type="text/event-stream",
+                             headers=headers)
+
+
+# ---------------------------------------------------------------------------
+# PDF export (Quill HTML -> FPDF compatible)
+# ---------------------------------------------------------------------------
 def sanitize_text_for_pdf(text: str) -> str:
-    """Sanitize text for PDF export by replacing problematic Unicode characters."""
     if not text:
         return ""
-    # Replace narrow no-break space and other problematic Unicode spaces
     replacements = {
-        '\u202f': ' ',  # Narrow no-break space
-        '\u00a0': ' ',  # No-break space
-        '\u2009': ' ',  # Thin space
-        '\u200a': ' ',  # Hair space
-        '\u200b': '',   # Zero-width space
-        '\u2028': '\n', # Line separator
-        '\u2029': '\n', # Paragraph separator
-        '\ufeff': '',   # BOM
+        "\u202f": " ", "\u00a0": " ", "\u2009": " ", "\u200a": " ",
+        "\u200b": "", "\u2028": "\n", "\u2029": "\n", "\ufeff": "",
     }
     for char, replacement in replacements.items():
         text = text.replace(char, replacement)
-    # Remove any remaining characters that can't be encoded in latin-1
-    return text.encode('latin-1', errors='replace').decode('latin-1')
+    return text.encode("latin-1", errors="replace").decode("latin-1")
+
 
 def pre_process_summary_html(html: str) -> str:
-    """
-    Convert Quill-specific HTML styles to FPDF-compatible tags.
-    Handles color, background-color, alignment, font size, strikethrough, and headers.
-    """
     if not html:
         return ""
 
-    def rgb_to_hex(rgb_str):
-        match = re.search(r'rgb\((\d+),\s*(\d+),\s*(\d+)\)', rgb_str)
+    def rgb_to_hex(rgb_str: str) -> Optional[str]:
+        match = re.search(r"rgb\((\d+),\s*(\d+),\s*(\d+)\)", rgb_str)
         if match:
-            return '#{:02x}{:02x}{:02x}'.format(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+            return "#{:02x}{:02x}{:02x}".format(int(match.group(1)),
+                                                int(match.group(2)),
+                                                int(match.group(3)))
         return None
 
-    # 1. Handle alignment classes in <p> or <hX> tags
-    def replace_align(match):
+    def replace_align(match: re.Match) -> str:
         tag = match.group(1)
         classes = match.group(2)
         content = match.group(3)
         align = ""
-        if 'ql-align-center' in classes: align = ' align="center"'
-        elif 'ql-align-right' in classes: align = ' align="right"'
-        elif 'ql-align-justify' in classes: align = ' align="justify"'
-        return f'<{tag}{align}>{content}</{tag}>'
+        if "ql-align-center" in classes:
+            align = ' align="center"'
+        elif "ql-align-right" in classes:
+            align = ' align="right"'
+        elif "ql-align-justify" in classes:
+            align = ' align="justify"'
+        return f"<{tag}{align}>{content}</{tag}>"
 
-    html = re.sub(r'<(p|h[1-6]) class="([^"]*ql-align-[^"]*)"[^>]*>(.*?)</\1>', replace_align, html, flags=re.DOTALL)
+    html = re.sub(r'<(p|h[1-6]) class="([^"]*ql-align-[^"]*)"[^>]*>(.*?)</\1>',
+                  replace_align, html, flags=re.DOTALL)
 
-    # 2. Enhance header tags with appropriate font sizes
-    # H1 -> size 7, H2 -> size 6, H3 -> size 5
-    def replace_header(match):
+    def replace_header(match: re.Match) -> str:
         level = match.group(1)
         content = match.group(2)
-        size_map = {'1': '7', '2': '6', '3': '5'}
-        size = size_map.get(level, '4')
-        # Preserve any align attribute if present
+        size = {"1": "7", "2": "6", "3": "5"}.get(level, "4")
         align_match = re.search(r'align="([^"]*)"', match.group(0))
-        align_attr = f' align="{align_match.group(1)}"' if align_match else ''
+        align_attr = f' align="{align_match.group(1)}"' if align_match else ""
         return f'<h{level}{align_attr}><font size="{size}"><b>{content}</b></font></h{level}>'
-    
-    html = re.sub(r'<h([1-3])(?:[^>]*)>(.*?)</h\1>', replace_header, html, flags=re.DOTALL)
 
-    # 3. Handle spans with styles and/or classes (color, background-color, font-size)
-    def replace_span(match):
+    html = re.sub(r"<h([1-3])(?:[^>]*)>(.*?)</h\1>", replace_header, html, flags=re.DOTALL)
+
+    def replace_span(match: re.Match) -> str:
         attributes = match.group(1)
         content = match.group(2)
-        
-        tags_before = ""
-        tags_after = ""
-        
-        # Handle background color first (before text color to avoid conflicts)
-        bg_match = re.search(r'background-color:\s*(rgb\(\d+,\s*\d+,\s*\d+\))', attributes)
+        before = ""
+        after = ""
+
+        bg_match = re.search(r"background-color:\s*(rgb\(\d+,\s*\d+,\s*\d+\))", attributes)
         if bg_match:
             hex_bg = rgb_to_hex(bg_match.group(1))
             if hex_bg:
-                # fpdf2 doesn't support bgcolor in font tag well, but we can wrap in a span-like approach
-                # For better compatibility, we'll use a marker that can be styled
-                tags_before += f'<mark style="background-color: {hex_bg};">'
-                tags_after = '</mark>' + tags_after
-        
-        # Handle text color in style attribute (use negative lookbehind to avoid matching background-color)
-        color_match = re.search(r'(?<!background-)color:\s*(rgb\(\d+,\s*\d+,\s*\d+\))', attributes)
+                before += f'<mark style="background-color: {hex_bg};">'
+                after = "</mark>" + after
+
+        color_match = re.search(r"(?<!background-)color:\s*(rgb\(\d+,\s*\d+,\s*\d+\))", attributes)
         if color_match:
             hex_color = rgb_to_hex(color_match.group(1))
             if hex_color:
-                tags_before += f'<font color="{hex_color}">'
-                tags_after = '</font>' + tags_after
+                before += f'<font color="{hex_color}">'
+                after = "</font>" + after
 
-        # Handle Quill classes for font size
-        if 'ql-size-small' in attributes:
-            tags_before += '<font size="2">'
-            tags_after = '</font>' + tags_after
-        elif 'ql-size-large' in attributes:
-            tags_before += '<font size="5">'
-            tags_after = '</font>' + tags_after
-        elif 'ql-size-huge' in attributes:
-            tags_before += '<font size="7">'
-            tags_after = '</font>' + tags_after
+        if "ql-size-small" in attributes:
+            before += '<font size="2">'
+            after = "</font>" + after
+        elif "ql-size-large" in attributes:
+            before += '<font size="5">'
+            after = "</font>" + after
+        elif "ql-size-huge" in attributes:
+            before += '<font size="7">'
+            after = "</font>" + after
 
-        return f"{tags_before}{content}{tags_after}"
+        return f"{before}{content}{after}"
 
-    html = re.sub(r'<span ([^>]*)>(.*?)</span>', replace_span, html, flags=re.DOTALL)
-    
-    # 4. Ensure strikethrough (<s> or <del>) tags are preserved
-    # fpdf2 supports <s> tag natively, so no conversion needed
-    # Just ensure they're present in the output
-    
+    html = re.sub(r"<span ([^>]*)>(.*?)</span>", replace_span, html, flags=re.DOTALL)
     return html
+
 
 @app.post("/export-pdf")
 async def export_pdf(
     summary: str = Form(default=""),
     original: str = Form(default=""),
     ui_lang: str = Form(default="en"),
-):
-    """Export summary to PDF file"""
-    pdf = MyFPDF()
+) -> Response:
+    pdf = FPDF()
     pdf.add_page()
-    
-    # Add Unicode font for Arabic support
+
     font_path = os.path.join(BASE_DIR, "static", "fonts")
     if os.path.exists(os.path.join(font_path, "DejaVuSans.ttf")):
         pdf.add_font("DejaVu", "", os.path.join(font_path, "DejaVuSans.ttf"), uni=True)
@@ -288,35 +454,25 @@ async def export_pdf(
     else:
         pdf.set_font("Helvetica", size=12)
         use_unicode_font = False
-    
-    # Sanitize text if not using Unicode font
+
     if not use_unicode_font:
         summary = sanitize_text_for_pdf(summary)
-    
-    # If summary contains HTML (from Quill), use write_html
+
     if "<" in summary and ">" in summary:
         try:
-            # Pre-process HTML to handle Quill-specific styling (like colors)
-            processed_summary = pre_process_summary_html(summary)
-            
-            # HTMLMixin/fpdf2 has limited CSS support. Use simple tags for better compatibility.
-            # Explicitly setting text color to black for lists and base text to avoid 'red' numbers.
-            html_wrapper = f"""
-            <div style="font-size: 12pt; line-height: 1.5; color: #000000;">
-                {processed_summary}
-            </div>
-            """
-            pdf.write_html(html_wrapper)
+            processed = pre_process_summary_html(summary)
+            pdf.write_html(
+                f'<div style="font-size: 12pt; line-height: 1.5; color: #000000;">{processed}</div>'
+            )
         except Exception:
+            logger.exception("write_html failed; falling back to multi_cell")
             pdf.multi_cell(0, 6, summary or "")
     else:
         pdf.multi_cell(0, 6, summary or "")
-    
-    # Generate PDF bytes
+
     pdf_bytes = bytes(pdf.output())
-    
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": "attachment; filename=summary.pdf"}
+        headers={"Content-Disposition": "attachment; filename=summary.pdf"},
     )

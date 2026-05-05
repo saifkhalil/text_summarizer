@@ -4,11 +4,9 @@ jinja2
 python-multipart
 pdfplumber
 python-docx
-sumy
-nltk
-numpy
-requests
 ollama
+markdown
+bleach
 python-dotenv
 a2wsgi
 fpdf2
